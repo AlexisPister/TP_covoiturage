@@ -13,7 +13,7 @@ import java.util.*;
 
 
 public class Individu extends Agent {
-	// List of of other agents
+	// List of other agents
 	private AID[] otherAgents;
 	// Iterate over all agents
 	private int k = 0; 
@@ -24,10 +24,10 @@ public class Individu extends Agent {
 	private int voiture; //Level of the car
 	private int heure_depart;
 	private int travel_time;
-	private int nb_places;
-	private int prix;
-	private String[] attributs;
-	private String str_attributs;
+	private int nb_places; //Number of places available
+	private int prix; //Price of one place
+	private String[] attributs = new String[6];
+	private String str_attributs; //Concatenation of all attributes
 	
 	// Constraints
 	private int money_max; //Maximum money the agent is willing to pay for the ride
@@ -38,44 +38,47 @@ public class Individu extends Agent {
 	private boolean is_driver = false;
 	private boolean is_passenger = false;
 	
-	// Initialize the purpose of the Agent
-	protected void But() {
-		attributs = new String[6];
-		ville_depart = "Lyon";
-		ville_arrive = "Paris";
-		voiture = 2;
-		heure_depart = 8;
-		travel_time = 5;
-		nb_places = 5;
-		prix = voiture * 100 / nb_places;
-		
-		//fill the array with the attributes (to communicate with other agents)
-		attributs[0] = ville_depart;
-		attributs[1] = ville_arrive;
-		attributs[2] = Integer.toString(voiture);
-		attributs[3] = Integer.toString(heure_depart);
-		attributs[4] = Integer.toString(travel_time);
-		attributs[5] = Integer.toString(prix);
-		
-		//Convert the array into a string (to communicate)
-		str_attributs = String.join(",", attributs);
-		System.out.println(str_attributs);
-		
-	}
-	
-	// Initialize the constraints of the Agent
-	protected void Contraintes() {
-		money_max = 100;
-		time_max = 10;
-		car_min = 1;
-	}
+	// Vector of current passengers
+	private Vector<AID> passengers = new Vector<AID>();
+	// Vector of agents who refused the proposition
+	private Vector<AID> refusals = new Vector<AID>();
 	
 	// Put agent initializations here
 	protected void setup() {
 		System.out.println("Agent "+getAID().getName()+" initialisation.");
-		But();
-		Contraintes();
 		
+		// Get arguments
+		Object[] args = getArguments();
+		if (args != null && args.length > 0) {
+			System.out.println("pass");
+			// Buts
+			ville_depart = (String) args[0];
+			ville_arrive = (String) args[1];
+			voiture = Integer.parseInt((String) args[2]);
+			heure_depart = Integer.parseInt((String) args[3]);
+			travel_time = Integer.parseInt((String) args[4]);
+			nb_places = Integer.parseInt((String) args[5]);
+			prix = voiture * 100 / nb_places;
+			
+			// Constraints
+			money_max = Integer.parseInt((String) args[6]);
+			time_max = Integer.parseInt((String) args[7]);
+			car_min = Integer.parseInt((String) args[8]);
+			
+			//fill the array with the attributes (to communicate with other agents)
+			attributs[0] = ville_depart;
+			attributs[1] = ville_arrive;
+			attributs[2] = Integer.toString(voiture);
+			attributs[3] = Integer.toString(heure_depart);
+			attributs[4] = Integer.toString(travel_time);
+			attributs[5] = Integer.toString(prix);
+			
+			//Convert the array into a string (to communicate)
+			str_attributs = String.join(",", attributs);
+			System.out.println(str_attributs);
+			
+		}
+
 		
 		// Register the agent in the DF
 		DFAgentDescription dfd = new DFAgentDescription();
@@ -91,8 +94,9 @@ public class Individu extends Agent {
 			fe.printStackTrace();
 		}
 		
-		// Add a TickerBehaviour that ask the DF the AIDs of other agents in the environnement
-		addBehaviour(new TickerBehaviour(this, 5000) {
+		// Add a TickerBehaviour that ask the DF the AIDs of other agents
+		// and make a proposition of codriving one agent at the time
+		addBehaviour(new TickerBehaviour(this, 8000) {
 			protected void onTick() {
 				// Update the list of seller agents
 				DFAgentDescription template = new DFAgentDescription();
@@ -119,19 +123,21 @@ public class Individu extends Agent {
 				//Tell the current role of the agent
 				if(is_driver == true) {
 					System.out.println(getAID().getName() + " is a driver");
+					System.out.println(getAID().getName() + " has got as passengers " + passengers);
 				}
 				if(is_passenger == true) {
 					System.out.println(getAID().getName() + " is a passenger");
 				}
 				
-				//
-				myAgent.addBehaviour(new Proposition());
+				// Propose to other agents a seat
+				if(is_passenger == false) {
+					myAgent.addBehaviour(new Proposition());
+				}
 			}
 		} );
 		
-		// Request the coordinates of other agents
+		// Continuously answer propositions of other agents
 		addBehaviour(new AnswerProposition());
-		
 		
 	}
 	
@@ -186,13 +192,12 @@ public class Individu extends Agent {
 		public void action() {
 			MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.PROPOSE);
 			ACLMessage msg = myAgent.receive(mt);
-			if(msg != null) {
+			if(msg != null && is_passenger == false && is_driver == false) {
 				// Look the proposition
 				String Content = msg.getContent();
 				String[] Content_array = Content.split(",");
 				ACLMessage reply = msg.createReply();
 				reply.setConversationId("covoiturage-proposal");
-				reply.setContent("OK");
 				
 				// If the proposition validate the constraints of the agent, accept it
 				/*
@@ -213,8 +218,10 @@ public class Individu extends Agent {
 					System.out.println("Proposition acceptee");
 					is_passenger = true;
 					reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
+					reply.setContent(getAID().getLocalName());
 				} else {
 					reply.setPerformative(ACLMessage.REFUSE);
+					reply.setContent("NO");
 				}
 				// Send the reply
 				myAgent.send(reply);
@@ -262,9 +269,17 @@ public class Individu extends Agent {
 						// Proposition accepted
 						System.out.println("ACCEPTED");
 						is_driver = true;
+						
+						// Add the agent in his list of passengers
+						passengers.addElement(msg.getSender());
+						
+						// Lose one seat
+						nb_places = nb_places - 1;
+						
 						step = 2;
 					} else if (msg.getPerformative() == ACLMessage.REFUSE) {
 						// Proposition rejected
+						refusals.add(msg.getSender());
 						step = 2;
 					}
 				} else {
@@ -278,52 +293,5 @@ public class Individu extends Agent {
 			return(step == 2);
 		}
 	}
-	
-	/* 
-	private class Covoiturage extends CyclicBehaviour {
-		int k = 0;
-		
-		public void action() {
-			MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.PROPOSE);
-			ACLMessage msg = myAgent.receive(mt);
-			
-			//Receive propositions if not a driver
-			if(msg != null && is_driver == false && is_passenger == false) {
-				//If the agent is not a driver, look the proposition
-				String Content = msg.getContent();
-				String[] Content_array = Content.split(",");
-				System.out.println("Proposition : " + Content);
-				
-				ACLMessage reply = msg.createReply();
-				reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
-				
-				
-				is_passenger = true;
-			}
-			
-			//System.out.println("message envoye a : " + otherAgents.getClass());
-			//Send proposition if not passenger
-			if(is_passenger == false && otherAgents != null) {
-				//Send a proposal one agent at a time
-				ACLMessage prop = new ACLMessage(ACLMessage.PROPOSE);
-				// System.out.println(myAgent.getName() + " envoie une "
-				// 		+ "proposition a " + otherAgents[k]);
-				prop.addReceiver(otherAgents[k]);
-				System.out.println(str_attributs);
-				prop.setContent(str_attributs);
-				myAgent.send(prop);
-				k++;
-				if(k == otherAgents.length - 1) {
-					k = 0;
-				}
-				// block(); //wait for the response (maybe)
-			} 
-			
-			
-		}
-		
-		
-		
-	} */
 }
 	
